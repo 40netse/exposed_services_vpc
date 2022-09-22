@@ -1,4 +1,7 @@
-
+#
+# Define tags as a local and push down to all the modules via the provider default_tags.
+# See below default_tags below
+#
 locals {
     common_tags = {
     Environment = var.env
@@ -9,6 +12,10 @@ locals {
     id_tag = var.vpc_tag_key != "" ? tomap({(var.vpc_tag_key) = (var.vpc_tag_value)}) : {}
 }
 
+#
+# Provider default_tags
+# ref: https://www.hashicorp.com/blog/default-tags-in-the-terraform-aws-provider
+#
 provider "aws" {
   region     = var.aws_region
   default_tags {
@@ -42,6 +49,11 @@ locals {
 locals {
   linux_private2_ip = cidrhost(local.public_subnet_cidr, var.linux_host_ip)
 }
+
+#
+# Some resources need unique names (e.g. security groups).
+# Generate a random string and append to any resources that need unique names
+#
 resource "random_string" "random" {
   length           = 5
   special          = false
@@ -131,6 +143,9 @@ module "allow_public_subnets" {
   egress_cidr_for_access  = "0.0.0.0/0"
 }
 
+#
+# Security VPC, IGW, Subnets, Route Tables, Route Table Associations
+#
 module "base-vpc" {
   source = "git::https://github.com/40netse/base_vpc_single_az.git"
 
@@ -150,6 +165,9 @@ module "base-vpc" {
 
 }
 
+#
+# VPC that runs the exposed services, IGW, Subnets, Route Tables, Route Table Associations
+#
 module "base-vpc2" {
   source = "git::https://github.com/40netse/base_vpc_single_az.git"
 
@@ -175,7 +193,12 @@ resource "aws_default_route_table" "default_route" {
   }
 }
 
-
+#
+# Single Fortigate in AZ1. Using a generic ec2_instance module. Only AP pairs use the sync and mgmt interfaces,
+# so disabled for a single instance.
+#
+# use create_public_elastic_ip bool if you want EIPs on the public interface
+#
 module "fortigate" {
   depends_on                  = [ aws_vpc_endpoint.endpoint_az1 ]
   source                      = "git::https://github.com/40netse/terraform-modules.git//aws_ec2_instance"
@@ -218,6 +241,9 @@ module "private_route_table_association" {
   route_table_id             = module.base-vpc.private_route_table_id
 }
 
+#
+# Linux Instances from here down. This instance runs the exposed service. In this example case, SSH, HTTP is all.
+#
 
 data "aws_ami" "ubuntu" {
   most_recent = true
@@ -274,12 +300,7 @@ module "linux_iam_profile" {
 }
 
 #
-# Optional Linux Instances from here down
-#
-# Linux Instance that are added on to the East and West VPCs for testing EAST->West Traffic
-#
-# Endpoint AMI to use for Linux Instances. Just added this on the end, since traffic generating linux instances
-# would not make it to a production template.
+# Linux Instances config template
 #
 
 data "template_file" "web_userdata" {
@@ -323,6 +344,10 @@ module "aws_linux_instance2" {
 
 data "aws_caller_identity" "current" {}
 
+#
+# NLB used for termination of Private Link from Endpoint. Listeners and port 22 and 80
+# Target group is the Linux instances above.
+#
 resource "aws_lb" "private_nlb" {
   name = "internal"
   internal = true
